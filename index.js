@@ -24,12 +24,6 @@ async function fetchWeatherData() {
     console.log('Puppeteer başlatılıyor...');
 
     let browser;
-    let weatherData = {
-        current: null,
-        hourly: null,
-        daily: null
-    };
-
     try {
         if (process.env.VERCEL) {
             const chromium = require('@sparticuz/chromium');
@@ -50,37 +44,31 @@ async function fetchWeatherData() {
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-        // Network dinleyici ekle
-        page.on('response', async (response) => {
-            const url = response.url();
-            try {
-                if (url.includes('servis.mgm.gov.tr')) {
-                    const data = await response.json();
-                    if (url.includes('sondurumlar')) weatherData.current = data[0] || data;
-                    if (url.includes('saatlik')) weatherData.hourly = data[0] || data;
-                    if (url.includes('gunluk')) weatherData.daily = data[0] || data;
-                }
-            } catch (e) {
-                // JSON parse hatası veya boş body olabilir, yoksay
-            }
-        });
-
         console.log(`${MGM_URL} adresine gidiliyor...`);
-        // Vercel 10sn limiti için domcontentloaded daha hızlıdır
+        // domcontentloaded hızı artırır, sadece sayfa iskeletinin olması fetch için yeterlidir.
         await page.goto(MGM_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-        // Verilerin gelmesi için kısa bir süre bekle (MGM API'leri hızlıdır)
-        console.log('Verilerin yakalanması bekleniyor...');
-        let attempts = 0;
-        while (attempts < 10) { // Maksimum 5 saniye bekle (500ms * 10)
-            if (weatherData.current && weatherData.hourly && weatherData.daily) break;
-            await new Promise(r => setTimeout(r, 500));
-            attempts++;
-        }
+        console.log('API verileri çekiliyor...');
+        const weatherData = await page.evaluate(async () => {
+            const fetchJson = (url) => fetch(url).then(r => r.json()).catch(() => null);
+
+            // Karaman-Merkez için doğru ID'ler: merkezid: 97001, istno: 17246
+            const [current, hourly, daily] = await Promise.all([
+                fetchJson('https://servis.mgm.gov.tr/web/sondurumlar?merkezid=97001'),
+                fetchJson('https://servis.mgm.gov.tr/web/tahminler/saatlik?istno=17246'),
+                fetchJson('https://servis.mgm.gov.tr/web/tahminler/gunluk?istno=97001')
+            ]);
+
+            return {
+                current: current ? (current[0] || current) : null,
+                hourly: hourly ? (hourly[0] || hourly) : null,
+                daily: daily ? (daily[0] || daily) : null
+            };
+        });
 
         const result = {
             ...weatherData,
-            method: weatherData.current ? 'Network Interception' : 'Failed',
+            method: weatherData.current ? 'Direct Page-Context Fetch' : 'Failed',
             updatedAt: new Date().toISOString()
         };
 
