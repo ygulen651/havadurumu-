@@ -49,28 +49,37 @@ async function fetchWeatherData() {
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
         console.log(`${MGM_URL} adresine gidiliyor...`);
-        await page.goto(MGM_URL, { waitUntil: 'networkidle2' });
+        await page.goto(MGM_URL, { waitUntil: 'networkidle0', timeout: 60000 });
+
+        // ng-controller elementinin yüklenmesini bekle
+        console.log('NG-Controller bekleniyor...');
+        await page.waitForSelector('[ng-controller]', { timeout: 10000 }).catch(() => console.log('Selector bulunamadı, devam ediliyor...'));
+
+        // Sayfa tam oturana kadar kısa bir süre bekle
+        await new Promise(r => setTimeout(r, 3000));
 
         console.log('Sayfa içeriği ayrıştırılıyor...');
-        // Angular scope verilerini yakala (Sayfa içindeki global değişkenleri veya DOM'u kullan)
         const data = await page.evaluate(() => {
             const el = document.querySelector('[ng-controller]');
-            if (el && window.angular) {
-                const scope = window.angular.element(el).scope();
+            const scope = (el && window.angular) ? window.angular.element(el).scope() : null;
+
+            if (scope) {
                 return {
-                    current: scope.sondurum || null,
-                    hourly: scope.tahmin || null,
-                    daily: scope.gunluktahmin || null,
+                    current: scope.sondurum ? scope.sondurum[0] : null,
+                    hourly: scope.tahmin || scope.saatlikTahmin || null,
+                    daily: scope.gunlukTahmin || scope.gunluktahmin || null,
+                    method: 'Angular Scope'
                 };
             }
-            // Angular yoksa DOM'dan çekmeyi deneyelim (Fallback)
+
+            // Fallback: DOM
             return {
                 current: {
                     sicaklik: document.querySelector('.anlik-sicaklik-deger')?.innerText,
-                    nem: document.querySelector('.anlik-nem-deger')?.innerText,
-                    hadise: document.querySelector('.anlik-yuksek-sicaklik-deger')?.innerText
+                    nem: document.querySelector('.anlik-nem-deger-kac')?.innerText,
+                    hadise: document.querySelector('.anlik-durum-hadise')?.innerText
                 },
-                source: 'DOM Fallback'
+                method: 'DOM Fallback'
             };
         });
 
