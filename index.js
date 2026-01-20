@@ -1,5 +1,5 @@
 const express = require('express');
-const puppeteer = require('puppeteer');
+const puppeteer = require(process.env.VERCEL ? 'puppeteer-core' : 'puppeteer');
 const cors = require('cors');
 require('dotenv').config();
 
@@ -24,9 +24,14 @@ async function fetchWeatherData() {
     console.log('Puppeteer başlatılıyor...');
 
     let browser;
+    let weatherData = {
+        current: null,
+        hourly: null,
+        daily: null
+    };
+
     try {
         if (process.env.VERCEL) {
-            // Vercel ortamı için yapılandırma
             const chromium = require('@sparticuz/chromium');
             browser = await puppeteer.launch({
                 args: chromium.args,
@@ -36,7 +41,6 @@ async function fetchWeatherData() {
                 ignoreHTTPSErrors: true,
             });
         } else {
-            // Yerel ortam için yapılandırma
             browser = await puppeteer.launch({
                 headless: "new",
                 args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -44,47 +48,39 @@ async function fetchWeatherData() {
         }
 
         const page = await browser.newPage();
-
-        // Tarayıcı gibi görünmek için User-Agent ayarla
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-        console.log(`${MGM_URL} adresine gidiliyor...`);
-        await page.goto(MGM_URL, { waitUntil: 'networkidle0', timeout: 60000 });
-
-        // ng-controller elementinin yüklenmesini bekle
-        console.log('NG-Controller bekleniyor...');
-        await page.waitForSelector('[ng-controller]', { timeout: 10000 }).catch(() => console.log('Selector bulunamadı, devam ediliyor...'));
-
-        // Sayfa tam oturana kadar kısa bir süre bekle
-        await new Promise(r => setTimeout(r, 3000));
-
-        console.log('Sayfa içeriği ayrıştırılıyor...');
-        const data = await page.evaluate(() => {
-            const el = document.querySelector('[ng-controller]');
-            const scope = (el && window.angular) ? window.angular.element(el).scope() : null;
-
-            if (scope) {
-                return {
-                    current: scope.sondurum ? scope.sondurum[0] : null,
-                    hourly: scope.tahmin || scope.saatlikTahmin || null,
-                    daily: scope.gunlukTahmin || scope.gunluktahmin || null,
-                    method: 'Angular Scope'
-                };
+        // Network dinleyici ekle
+        page.on('response', async (response) => {
+            const url = response.url();
+            try {
+                if (url.includes('servis.mgm.gov.tr')) {
+                    const data = await response.json();
+                    if (url.includes('sondurumlar')) weatherData.current = data[0] || data;
+                    if (url.includes('saatlik')) weatherData.hourly = data[0] || data;
+                    if (url.includes('gunluk')) weatherData.daily = data[0] || data;
+                }
+            } catch (e) {
+                // JSON parse hatası veya boş body olabilir, yoksay
             }
-
-            // Fallback: DOM
-            return {
-                current: {
-                    sicaklik: document.querySelector('.anlik-sicaklik-deger')?.innerText,
-                    nem: document.querySelector('.anlik-nem-deger-kac')?.innerText,
-                    hadise: document.querySelector('.anlik-durum-hadise')?.innerText
-                },
-                method: 'DOM Fallback'
-            };
         });
 
+        console.log(`${MGM_URL} adresine gidiliyor...`);
+        // Vercel 10sn limiti için domcontentloaded daha hızlıdır
+        await page.goto(MGM_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+        // Verilerin gelmesi için kısa bir süre bekle (MGM API'leri hızlıdır)
+        console.log('Verilerin yakalanması bekleniyor...');
+        let attempts = 0;
+        while (attempts < 10) { // Maksimum 5 saniye bekle (500ms * 10)
+            if (weatherData.current && weatherData.hourly && weatherData.daily) break;
+            await new Promise(r => setTimeout(r, 500));
+            attempts++;
+        }
+
         const result = {
-            ...data,
+            ...weatherData,
+            method: weatherData.current ? 'Network Interception' : 'Failed',
             updatedAt: new Date().toISOString()
         };
 
@@ -96,7 +92,7 @@ async function fetchWeatherData() {
         console.error('Puppeteer hatası:', error.message);
         throw error;
     } finally {
-        await browser.close();
+        if (browser) await browser.close();
     }
 }
 
