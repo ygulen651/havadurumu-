@@ -91,6 +91,18 @@ async function fetchWeatherData() {
     }
 }
 
+// Root Endpoint (Kullanıcıyı bilgilendirmek için)
+app.get('/', (req, res) => {
+    res.send(`
+        <h1>Karaman Hava Durumu API - Çalışıyor 🚀</h1>
+        <p>Verilere erişmek için aşağıdaki uç noktaları kullanabilirsiniz:</p>
+        <ul>
+            <li><a href="/api/weather">Tüm Veriler (Anlık, Saatlik, Günlük)</a></li>
+        </ul>
+        <p>MGM verileri her 5 dakikada bir güncellenir.</p>
+    `);
+});
+
 // Ana Endpoint
 app.get('/api/weather', async (req, res) => {
     try {
